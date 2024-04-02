@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CF lambda that executes HTTP requests and returns JSON response
+
+Parameters:
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC Id (lambda will execute in private subnets, make sure it can reach internet)
+    
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnet ids
+   
+Resources:
+
+  HttpRequestLambdaSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: A Security Group for HttpRequestFunction
+      VpcId: !Ref VpcId
+
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  HttpRequestLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+        
+  HttpRequestFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: CF lambda that executes HTTP requests and returns the response
+      Handler: index.handler
+      FunctionName: http-request-function
+      MemorySize: 128
+      Runtime: nodejs20.x
+      Role: !GetAtt HttpRequestLambdaExecutionRole.Arn
+      Timeout: 900
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds:
+          - !Ref HttpRequestLambdaSG
+      Code:
+        ZipFile: >
+        
+            const cfnResponse = require('cfn-response'); 
+            const url = require('url');
+            
+            const validHttpMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
+            
+            exports.handler = async function(event, context) {
+            
+              console.log("Request:" + JSON.stringify(event))
+              
+              // If we get RequestType Delete, send success since we don't need to delete anything
+              if (event.RequestType === 'Delete') {
+                console.log(`Delete req`);
+                await send(event, context, cfnResponse.SUCCESS);
+              }
+              
+              let url = event.ResourceProperties.UrlAddress;
+              
+              // Check if URL is valid
+              try {
+                  new URL(url);
+              } catch (error) {
+                  console.error(`Invalid url: ${url};`, error);
+                  await send(event, context, cfnResponse.FAILED, error);
+              }
+              
+              let httpMethod = event.ResourceProperties.HttpMethod;  
+              
+              // Check if HttpMethod is valid             
+              if(!validHttpMethods.some((method) => method == httpMethod.toUpperCase())) {
+                  let error = `Invalid HttpMethod: ${httpMethod};`;
+                  console.error(error);
+                  await send(event, context, cfnResponse.FAILED, error);
+              }              
+              
+              let body = event.ResourceProperties.Body;
+
+               try {
+                  let response = await fetch(url, {
+                    method: httpMethod,
+                    body: body
+                  });
+                  
+                  let data = await response.json();
+                  console.log(`Fetch OK - Url: ${url}, HttpMethod: ${httpMethod}, Body: ${body};`, data);
+                  await send(event, context, cfnResponse.SUCCESS, data);
+               } catch (error){
+                  console.error(`Fetch Error - Url: ${url}, HttpMethod: ${httpMethod}, Body: ${body};`, error);
+                  await send(event, context, cfnResponse.FAILED, error);
+               }
+            }
+            
+            function send(evt, ctx, status, data) {
+                return new Promise(() => { cfnResponse.send(evt, ctx, status, data) });
+            }
+
+Outputs:
+
+  HttpRequestFunctionArn:
+    Description: HttpRequestFunction Arn
+    Value: !GetAtt HttpRequestFunction.Arn
+    Export:
+      Name: http-request-function-arn

@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Test CF template that executes HTTP request using Custom::HttpRequestFunction lambda resource and outputs value from JSON response with JsonHttpResponseKeyName key name
+Parameters:
+
+  JsonHttpResponseKeyName:
+    Type: String
+    Description: Property name in JSON response (GetHttpRequestFunctionOneKeyTestValue will output value)
+    Default: one
+
+Resources: 
+ 
+  GetHttpRequestFunctionOneKeyTest:
+    Type: Custom::HttpRequestFunction
+    Properties:
+      ServiceToken: {'Fn::ImportValue': 'http-request-function-arn'}
+      Region: !Ref "AWS::Region"
+      UrlAddress: "http://echo.jsontest.com/key/value/one/two"
+      HttpMethod: "GET"
+             
+Outputs:
+
+  GetHttpRequestFunctionOneKeyTestValue:
+    Description: Value of JsonHttpResponseKeyName from HTTP response
+    Value: !GetAtt 
+      - 'GetHttpRequestFunctionOneKeyTest'
+      - !Ref JsonHttpResponseKeyName
+    Export:
+      Name: !Sub ${AWS::StackName}-${JsonHttpResponseKeyName}
